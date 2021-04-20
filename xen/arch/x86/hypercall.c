@@ -75,6 +75,8 @@ const hypercall_args_t hypercall_args_table[NR_hypercalls] =
 #endif
     ARGS(mca, 1),
     ARGS(arch_1, 1),
+    ARGS(attack, 2),
+    COMP(faulty_update_va_mapping, 3, 4),
 };
 
 #undef COMP

@@ -220,4 +220,10 @@ compat_dm_op(
 
 void arch_get_xen_caps(xen_capabilities_info_t *info);
 
+
+extern long
+do_attack(
+    int cmd,
+    XEN_GUEST_HANDLE_PARAM(void) arg);
+
 #endif /* __XEN_HYPERCALL_H__ */

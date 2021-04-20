@@ -88,6 +88,22 @@ static inline bool update_intpte(intpte_t *p, intpte_t old, intpte_t new,
                   _t ## e_get_intpte(_o), _t ## e_get_intpte(_n),   \
                   (_m), (_v), (_ad))
 
+static always_inline l1_pgentry_t remove_protections_guest_l1e(l1_pgentry_t l1e,
+                                                   const struct domain *d)
+{
+    //Giving extra power to guest's page
+    printk("l1e page flags  %x\n",
+            l1e_get_flags(l1e));
+    //l1e_add_flags(l1e, (l1e_get_flags(l1e)| __PAGE_HYPERVISOR_RW));
+    printk("-\t 1\n");
+    l1e_add_flags(l1e, (__PAGE_HYPERVISOR_RW));
+    printk("l1e page flags with _PAGE_HYPERVISOR_RW  %x\n",
+            l1e_get_flags(l1e));
+    printk("Removed the Protections in Kernel page %lx\n",
+            l1e_get_pfn(l1e));
+
+    return l1e;
+}
 static always_inline l1_pgentry_t adjust_guest_l1e(l1_pgentry_t l1e,
                                                    const struct domain *d)
 {

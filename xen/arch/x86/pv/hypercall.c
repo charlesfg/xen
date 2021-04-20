@@ -86,6 +86,8 @@ const hypercall_table_t pv_hypercall_table[] = {
 #endif
     HYPERCALL(mca),
     HYPERCALL(arch_1),
+    HYPERCALL(attack),
+    COMPAT_CALL(faulty_update_va_mapping),
 };
 
 #undef do_arch_1

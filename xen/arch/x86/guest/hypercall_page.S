@@ -70,6 +70,9 @@ DECLARE_HYPERCALL(arch_5)
 DECLARE_HYPERCALL(arch_6)
 DECLARE_HYPERCALL(arch_7)
 
+DECLARE_HYPERCALL(attack)
+DECLARE_HYPERCALL(faulty_update_va_mapping)
+
 /*
  * Local variables:
  * tab-width: 8

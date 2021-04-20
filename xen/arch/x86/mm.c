@@ -140,11 +140,16 @@
 #include <asm/pci.h>
 #include <asm/guest.h>
 #include <asm/hvm/ioreq.h>
+#include <asm/x86_64/uaccess.h>
+#include <asm/grant_table.h>
 
 #include <asm/hvm/grant_table.h>
 #include <asm/pv/domain.h>
 #include <asm/pv/grant_table.h>
 #include <asm/pv/mm.h>
+
+/* Attack emulation header and flags */
+#include <xen/attack.h>
 
 #ifdef CONFIG_PV
 #include "pv/mm.h"
@@ -2161,6 +2166,12 @@ void page_unlock(struct page_info *page)
 }
 
 #ifdef CONFIG_PV
+#define LOG(_m,_a...) \
+        printk("%s:%d- " _m "\n",__FILE__,__LINE__, ## _a); 
+
+#define logvar(_v,_f,_a...) \
+        printk(#_v "\t" _f "\n",_v);
+
 /*
  * PTE flags that a guest may change without re-validating the PTE.
  * All other bits affect translation, caching, or Xen's safety.
@@ -2169,6 +2180,92 @@ void page_unlock(struct page_info *page)
     (_PAGE_NX_BIT | _PAGE_AVAIL_HIGH | _PAGE_AVAIL | _PAGE_GLOBAL | \
      _PAGE_DIRTY | _PAGE_ACCESSED | _PAGE_USER)
 
+/* Update the L1 entry at pl1e to new value nl1e. WHITHOUT CONTROLS*/
+static int faulty_mod_l1_entry(l1_pgentry_t *pl1e, l1_pgentry_t nl1e,
+                        mfn_t gl1mfn, unsigned int cmd,
+                        struct vcpu *pt_vcpu, struct domain *pg_dom)
+{
+    bool preserve_ad = (cmd == MMU_PT_UPDATE_PRESERVE_AD);
+    l1_pgentry_t ol1e;
+    struct domain *pt_dom = pt_vcpu->domain;
+    int rc = 0;
+
+    if ( unlikely(__copy_from_user(&ol1e, pl1e, sizeof(ol1e)) != 0) )
+        return -EFAULT;
+
+    LOG("ol1e filled!");
+
+    /* Fast path for sufficiently-similar mappings. */
+    if ( 1 )
+    {
+        LOG("Fast Path!");
+        nl1e = adjust_guest_l1e(nl1e, pt_dom);
+        //nl1e = remove_protections_guest_l1e(nl1e, pt_dom);
+        rc = UPDATE_ENTRY(l1, pl1e, ol1e, nl1e, gl1mfn, pt_vcpu,
+                preserve_ad);
+        return rc ? 0 : -EBUSY;
+    }
+
+    ASSERT(!paging_mode_refcounts(pt_dom));
+
+    if ( l1e_get_flags(nl1e) & _PAGE_PRESENT )
+    {
+
+        if ( unlikely(l1e_get_flags(nl1e) & l1_disallow_mask(pt_dom)) )
+        {
+            printk("Bad L1 flags %x\n",
+                    l1e_get_flags(nl1e) & l1_disallow_mask(pt_dom));
+            return -EINVAL;
+        }
+
+        /* Fast path for sufficiently-similar mappings. */
+        if ( !l1e_has_changed(ol1e, nl1e, ~FASTPATH_FLAG_WHITELIST) )
+        {
+            nl1e = adjust_guest_l1e(nl1e, pt_dom);
+            rc = UPDATE_ENTRY(l1, pl1e, ol1e, nl1e, gl1mfn, pt_vcpu,
+                              preserve_ad);
+            return rc ? 0 : -EBUSY;
+        }
+
+        switch ( rc = get_page_from_l1e(nl1e, pt_dom, pg_dom) )
+        {
+        default:
+            return rc;
+        case 0:
+            LOG("-");
+            break;
+        case _PAGE_RW ... _PAGE_RW | PAGE_CACHE_ATTRS:
+            LOG("-");
+            ASSERT(!(rc & ~(_PAGE_RW | PAGE_CACHE_ATTRS)));
+            l1e_flip_flags(nl1e, rc);
+            rc = 0;
+            break;
+        }
+
+        nl1e = adjust_guest_l1e(nl1e, pt_dom);
+        if ( unlikely(!UPDATE_ENTRY(l1, pl1e, ol1e, nl1e, gl1mfn, pt_vcpu,
+                                    preserve_ad)) )
+        {
+            LOG("-");
+            ol1e = nl1e;
+            rc = -EBUSY;
+        }
+    }
+    else if ( pv_l1tf_check_l1e(pt_dom, nl1e) )
+    {
+        LOG("-");
+        return -ERESTART;
+    }
+    else if ( unlikely(!UPDATE_ENTRY(l1, pl1e, ol1e, nl1e, gl1mfn, pt_vcpu,
+                                     preserve_ad)) )
+    {
+        LOG("-");
+        return -EBUSY;
+    }
+
+    put_page_from_l1e(ol1e, pt_dom);
+    return rc;
+}
 /* Update the L1 entry at pl1e to new value nl1e. */
 static int mod_l1_entry(l1_pgentry_t *pl1e, l1_pgentry_t nl1e,
                         mfn_t gl1mfn, unsigned int cmd,
@@ -2291,6 +2388,30 @@ static int mod_l2_entry(l2_pgentry_t *pl2e,
     struct page_info *l2pg = mfn_to_page(mfn);
     unsigned long type = l2pg->u.inuse.type_info;
     int rc = 0;
+    
+    
+    if ( attack_flags && at_payload.debug && d->domain_id == 1)
+    {
+        printk("mod_l2_entry:\n");
+        printk("\tpayload address:         %lx\n", at_payload.addr);
+        printk("\tpayload l2e_from_intpte: %lx\n", l2e_from_intpte(at_payload.addr).l2);
+        printk("\tnl2e address:            %lx\n", nl2e.l2);
+        at_payload.debug--;
+    }
+
+    /* shortcut and update the l2 entry despite its contents */
+    if ( unlikely(attack_flags & ATTACK_BYPASS_L2_UPDATE &&
+                nl2e.l2 == l2e_from_intpte(at_payload.addr).l2))
+    {
+        if ( at_payload.debug )
+            printk("bypassing the address %lx\n", l2e_from_intpte(at_payload.addr).l2);
+
+        if ( unlikely(__copy_from_user(&ol2e, pl2e, sizeof(ol2e)) != 0) )
+            return -EFAULT;
+        if ( likely(UPDATE_ENTRY(l2, pl2e, ol2e, nl2e, mfn, vcpu, preserve_ad)) )
+            return 0;
+        return -EBUSY;
+    }
 
     if ( unlikely(!is_guest_l2_slot(d, type, pgentry_ptr_to_slot(pl2e))) )
     {
@@ -3912,7 +4033,7 @@ long do_mmu_update(
 {
     struct mmu_update req;
     void *va = NULL;
-    unsigned long gpfn, gmfn;
+    unsigned long gpfn, gmfn, at_gmfn;
     struct page_info *page;
     unsigned int cmd, i = 0, done = 0, pt_dom;
     struct vcpu *curr = current, *v = curr;
@@ -3921,6 +4042,9 @@ long do_mmu_update(
     bool sync_guest = false;
     uint32_t xsm_needed = 0;
     uint32_t xsm_checked = 0;
+    
+    struct page_info *at_page;
+
     int rc = put_old_guest_table(curr);
 
     if ( unlikely(rc) )
@@ -4003,6 +4127,7 @@ long do_mmu_update(
         case MMU_PT_UPDATE_NO_TRANSLATE:
         {
             p2m_type_t p2mt;
+            p2m_type_t at_p2mt;
 
             rc = -EOPNOTSUPP;
             if ( unlikely(paging_mode_refcounts(pt_owner)) )
@@ -4026,6 +4151,7 @@ long do_mmu_update(
 
             req.ptr -= cmd;
             gmfn = req.ptr >> PAGE_SHIFT;
+            
             page = get_page_from_gfn(pt_owner, gmfn, &p2mt, P2M_ALLOC);
 
             if ( unlikely(!page) || p2mt != p2m_ram_rw )
@@ -4054,6 +4180,21 @@ long do_mmu_update(
             }
             va = _p(((unsigned long)va & PAGE_MASK) + (req.ptr & ~PAGE_MASK));
 
+            /**
+            int va_idx = is_attack_address((unsigned long) va);
+            if (unlikely(va_idx))
+            {
+                printk("=======================\n");
+                printk("va found: %lx\n", at_payload.addrs[va_idx -1]);
+                printk("pt_owner->domain_id = %d\n", pt_owner->domain_id);
+                printk("req.ptr = %lx\n", req.ptr);
+                printk("req.val = %lx\n", req.val);
+                printk("gmfn:\t%lx\n",gmfn);
+                printk("mfn:\t%lx\n",mfn);
+                printk("va:\t%p\n", va);
+            }*/
+
+
             if ( page_lock(page) )
             {
                 switch ( page->u.inuse.type_info & PGT_type_mask )
@@ -4066,6 +4207,21 @@ long do_mmu_update(
                 case PGT_l2_page_table:
                     if ( unlikely(pg_owner != pt_owner) )
                         break;
+                    if ( attack_flags && at_payload.debug && pt_owner->domain_id == 1)
+                    {
+                        at_gmfn = at_payload.addr >> PAGE_SHIFT;
+                        at_page = get_page_from_gfn(pt_owner, at_gmfn, &at_p2mt, P2M_ALLOC);
+                        printk("pt_owner->domain_id = %d\n", pt_owner->domain_id);
+                        printk("req.ptr = %lx\n", req.ptr);
+                        printk("req.val = %lx\n", req.val);
+                        printk("at_payload.addr info start\n");
+                        //printk("gmfn = %lx\n", at_gmfn);
+                        //printk("mfn = %lx\n", (long unsigned int) page_to_mfn(at_page));
+                        printk("at_payload.addr info end\n");
+                        printk("gmfn:\t%lx\n",gmfn);
+                        //printk("mfn:\t%lx\n",mfn);
+                        printk("va:\t%p\n", va);
+                    }
                     rc = mod_l2_entry(va, l2e_from_intpte(req.val), mfn,
                                       cmd == MMU_PT_UPDATE_PRESERVE_AD, v);
                     break;
@@ -4380,6 +4536,144 @@ int steal_page(
 }
 
 #ifdef CONFIG_PV
+static int __do_faulty_update_va_mapping(
+    unsigned long va, u64 val64, unsigned long flags, struct domain *pg_owner)
+{
+    l1_pgentry_t   val = l1e_from_intpte(val64);
+    struct vcpu   *v   = current;
+    struct domain *d   = v->domain;
+    struct page_info *gl1pg;
+    l1_pgentry_t  *pl1e;
+    unsigned long  bmap_ptr;
+    mfn_t          gl1mfn;
+    cpumask_t     *mask = NULL;
+    int            rc;
+
+    rc = -EINVAL;
+
+    LOG("Starting");
+    printk("== :\n");
+    printk("Input parameters:\n");
+    logvar(va, "%lx");
+    logvar(val64, "%lx (mfn)");
+    logvar(val.l1, "%lx (val.l1)");
+
+    pl1e = map_guest_l1e(va, &gl1mfn);
+
+    logvar(mfn_x(gl1mfn),"%"PRI_mfn);
+    printk("pl1e: %lx\n", pl1e ? pl1e->l1:0UL);
+
+
+
+
+    gl1pg = pl1e ? get_page_from_mfn(gl1mfn, d) : NULL;
+    printk("gl1pg: %lx \n", gl1pg ? gl1pg->count_info : 0UL);
+    if ( unlikely(!gl1pg) )
+        goto out;
+
+    LOG("gl1pg obtained correctly!");
+    if ( !page_lock(gl1pg) )
+    {
+        LOG("!! gl1pg Locked");
+        put_page(gl1pg);
+        goto out;
+    }
+    LOG("gl1pg not Locked");
+
+    if ( (gl1pg->u.inuse.type_info & PGT_type_mask) != PGT_l1_page_table )
+    {
+        LOG("!! gl1pg not a L1 page table");
+        page_unlock(gl1pg);
+        put_page(gl1pg);
+        goto out;
+    }
+    LOG("gl1pg is a L1 page table");
+
+    rc = faulty_mod_l1_entry(pl1e, val, gl1mfn, MMU_NORMAL_PT_UPDATE, v, pg_owner);
+    logvar(rc,"%d (rc after mod_l1_entry)");
+  
+
+    page_unlock(gl1pg);
+    put_page(gl1pg);
+    
+
+ out:
+    if ( pl1e )
+        unmap_domain_page(pl1e);
+
+    LOG("-");
+    /*
+     * Any error at this point means that we haven't change the L1e.  Skip the
+     * flush, as it won't do anything useful.  Furthermore, va is guest
+     * controlled and not necesserily audited by this point.
+     */
+    if ( rc )
+        return rc;
+    LOG("-");
+
+    switch ( flags & UVMF_FLUSHTYPE_MASK )
+    {
+    case UVMF_TLB_FLUSH:
+        switch ( (bmap_ptr = flags & ~UVMF_FLUSHTYPE_MASK) )
+        {
+        case UVMF_LOCAL:
+            flush_tlb_local();
+            break;
+        case UVMF_ALL:
+            mask = d->dirty_cpumask;
+            break;
+        default:
+            mask = this_cpu(scratch_cpumask);
+            rc = vcpumask_to_pcpumask(d, const_guest_handle_from_ptr(bmap_ptr,
+                                                                     void),
+                                      mask);
+            break;
+        }
+        if ( mask )
+            flush_tlb_mask(mask);
+        break;
+
+    case UVMF_INVLPG:
+        switch ( (bmap_ptr = flags & ~UVMF_FLUSHTYPE_MASK) )
+        {
+        case UVMF_LOCAL:
+            paging_invlpg(v, va);
+            break;
+        case UVMF_ALL:
+            mask = d->dirty_cpumask;
+            break;
+        default:
+            mask = this_cpu(scratch_cpumask);
+            rc = vcpumask_to_pcpumask(d, const_guest_handle_from_ptr(bmap_ptr,
+                                                                     void),
+                                      mask);
+            break;
+        }
+        if ( mask )
+            flush_tlb_one_mask(mask, va);
+        break;
+    }
+    LOG("Finishing");
+
+    return rc;
+}
+long do_faulty_update_va_mapping(unsigned long va, u64 val64,
+                          unsigned long flags)
+{
+    int rc;
+   
+    printk("Entering faulty_update_va_mapping\n");
+    rc =  __do_faulty_update_va_mapping(va, val64, flags, current->domain);
+
+    if ( rc == -ERESTART )
+    {
+        printk("This is a continuation hypercall\n");
+        rc = hypercall_create_continuation(
+            __HYPERVISOR_faulty_update_va_mapping, "lll", va, val64, flags);
+    }
+
+    return rc;
+}
 static int __do_update_va_mapping(
     unsigned long va, u64 val64, unsigned long flags, struct domain *pg_owner)
 {
@@ -4481,6 +4775,7 @@ static int __do_update_va_mapping(
     return rc;
 }
 
+
 long do_update_va_mapping(unsigned long va, u64 val64,
                           unsigned long flags)
 {
@@ -4511,6 +4806,19 @@ long do_update_va_mapping_otherdomain(unsigned long va, u64 val64,
         rc = hypercall_create_continuation(
             __HYPERVISOR_update_va_mapping_otherdomain,
             "llli", va, val64, flags, domid);
+
+    return rc;
+}
+
+int compat_faulty_update_va_mapping(unsigned int va, uint32_t lo, uint32_t hi,
+                             unsigned int flags)
+{
+    int rc = __do_update_va_mapping(va, ((uint64_t)hi << 32) | lo,
+                                    flags, current->domain);
+
+    if ( rc == -ERESTART )
+        rc = hypercall_create_continuation(
+            __HYPERVISOR_update_va_mapping, "iiii", va, lo, hi, flags);
 
     return rc;
 }
@@ -6191,4 +6499,4 @@ unsigned long get_upper_mfn_bound(void)
  * tab-width: 4
  * indent-tabs-mode: nil
  * End:
- */
+*/
