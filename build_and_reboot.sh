@@ -8,5 +8,5 @@ sudo update-grub
 set +e
 xl shutdown guest01
 xl shutdown guest02
-sleep 10
+sleep 3
 reboot

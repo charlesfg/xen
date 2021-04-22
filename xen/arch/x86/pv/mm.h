@@ -1,6 +1,7 @@
 #ifndef __PV_MM_H__
 #define __PV_MM_H__
 
+l1_pgentry_t *faulty_map_guest_l1e(unsigned long linear, mfn_t *gl1mfn);
 l1_pgentry_t *map_guest_l1e(unsigned long linear, mfn_t *gl1mfn);
 
 int new_guest_cr3(mfn_t mfn);

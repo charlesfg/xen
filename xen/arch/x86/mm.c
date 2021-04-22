@@ -4543,27 +4543,39 @@ static int __do_faulty_update_va_mapping(
     struct vcpu   *v   = current;
     struct domain *d   = v->domain;
     struct page_info *gl1pg;
-    l1_pgentry_t  *pl1e;
+    l1_pgentry_t  *pl1e, *pl1_zero;
     unsigned long  bmap_ptr;
-    mfn_t          gl1mfn;
+    mfn_t          gl1mfn, gl1_zero_mfn;
     cpumask_t     *mask = NULL;
     int            rc;
-
+    // New vars to adapt code
+    //xen_pfn_t dummy_pfn = 0;
+    unsigned long _val = 27041950L;
+    mfn_t target_addr_mfn;
+    struct page_info *target_addr_page;
     rc = -EINVAL;
+    
+    logvar(_val, "%lx");
+
 
     LOG("Starting");
+    show_page_walk(va); 
     printk("== :\n");
     printk("Input parameters:\n");
     logvar(va, "%lx");
     logvar(val64, "%lx (mfn)");
     logvar(val.l1, "%lx (val.l1)");
 
+    //LOG("Will will write %lx into address %lx", _val, val64);
+    //*((unsigned long *) val64) = _val;
+
     pl1e = map_guest_l1e(va, &gl1mfn);
-
+    pl1_zero = map_guest_l1e(0, &gl1_zero_mfn);
+    
     logvar(mfn_x(gl1mfn),"%"PRI_mfn);
+    logvar(mfn_x(gl1_zero_mfn),"%"PRI_mfn);
     printk("pl1e: %lx\n", pl1e ? pl1e->l1:0UL);
-
-
+    printk("pl1_zero: %lx\n", pl1_zero ? pl1_zero->l1:0UL);
 
 
     gl1pg = pl1e ? get_page_from_mfn(gl1mfn, d) : NULL;
@@ -4593,9 +4605,38 @@ static int __do_faulty_update_va_mapping(
     logvar(rc,"%d (rc after mod_l1_entry)");
   
 
+    //LOG("Will will write %lx into address %lx", _val, val64);
+    //*((unsigned long *) val64) = _val;
+
+
+//    LOG("Will try to write %lx to address on %lx",val64, val64);
+//    xen_pfn_t mfn_ = mfn_x(val64);
+//
+//    __copy_to_guest_offset(dummy_pfn,val64, virt_to_mfn(val64), 1);
+//
+    /** 
+     * Try to update the m2p table 
+     * Code adapted from the MMU_MACHPHYS_UPDATE
+     */
+
+    LOG("Trying to map the physical addres in the m2p");
+    target_addr_mfn = maddr_to_mfn(val64);
+    logvar(mfn_x(target_addr_mfn),"%"PRI_mfn);
+    // gl1mfn  => gpfn = req.val;
+    target_addr_page = mfn_to_page(target_addr_mfn);
+    printk("target_addr_page: %lx \n", target_addr_page ? target_addr_page->count_info : 0UL);
+    set_gpfn_from_mfn(mfn_x(target_addr_mfn), mfn_x(gl1mfn));
+    paging_mark_pfn_dirty(pg_owner, _pfn(mfn_x(gl1mfn)));
+
+
+
     page_unlock(gl1pg);
     put_page(gl1pg);
+    put_page(target_addr_page);
     
+    LOG("l1e_get_pfn\t%lx", l1e_get_pfn(val));
+    LOG("mfn_valid\t%d", mfn_valid(_mfn(l1e_get_pfn(val))));
+    show_page_walk(va); 
 
  out:
     if ( pl1e )

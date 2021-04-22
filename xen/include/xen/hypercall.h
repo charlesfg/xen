@@ -226,4 +226,10 @@ do_attack(
     int cmd,
     XEN_GUEST_HANDLE_PARAM(void) arg);
 
+extern int
+do_arbitrary_access(
+        unsigned long dst_maddr, 
+        const void *src, 
+        size_t n);
+
 #endif /* __XEN_HYPERCALL_H__ */

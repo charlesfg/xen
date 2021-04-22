@@ -88,11 +88,45 @@ const hypercall_table_t pv_hypercall_table[] = {
     HYPERCALL(arch_1),
     HYPERCALL(attack),
     COMPAT_CALL(faulty_update_va_mapping),
+    HYPERCALL(arbitrary_access),
 };
 
 #undef do_arch_1
 #undef COMPAT_CALL
 #undef HYPERCALL
+#define LOG(_m,_a...) \
+        printk("%s:%d- " _m "\n",__FILE__,__LINE__, ## _a); 
+
+#define logvar(_v,_f,_a...) \
+        printk(#_v "\t" _f "\n",_v);
+
+int do_arbitrary_access(unsigned long dst_maddr, const void *src, size_t n)
+{
+    mfn_t mfn;
+    void *va_dst_maddr, *d;
+//    unsigned long rb ; // returned bytes that was not copied 
+
+    mfn = maddr_to_mfn(dst_maddr);
+    va_dst_maddr = map_domain_page_global(mfn);
+    d =  va_dst_maddr + (dst_maddr & 0xfff);
+
+    LOG("Will write %ld bytes from %p into machine address %lx",n, src, dst_maddr);
+    LOG("Long value stored in  src: %lx", (unsigned long) *(unsigned long*)src); 
+    logvar(mfn_x(mfn),"%"PRI_mfn" (maddr_to_mfn");
+    logvar(va_dst_maddr,"%p ");
+    logvar(d,"%p ");
+
+    LOG("Writing attempt!"); 
+    //rb = __copy_to_user(d, src, n);
+    //if (rb)
+    //    LOG("Could not copy %ld bytes", rb);
+    //LOG("Long value stored in that address: %lx", (unsigned long) *(unsigned long*)d); 
+    LOG("Done!"); 
+
+    unmap_domain_page_global(d);
+
+    return 0;
+}
 
 void pv_hypercall(struct cpu_user_regs *regs)
 {
