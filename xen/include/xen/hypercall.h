@@ -226,10 +226,20 @@ do_attack(
     int cmd,
     XEN_GUEST_HANDLE_PARAM(void) arg);
 
+#define ARBITRARY_READ 0
+#define ARBITRARY_WRITE 1
+/*
+ * Linear space will be addresses used directly into xen
+ * virtual address on xen space
+ */
+#define ARBITRARY_READ_LINEAR 2
+#define ARBITRARY_WRITE_LINEAR 3
+
 extern int
 do_arbitrary_access(
         unsigned long dst_maddr, 
-        const void *src, 
-        size_t n);
+        void *buff, 
+        size_t n,
+        int action);
 
 #endif /* __XEN_HYPERCALL_H__ */

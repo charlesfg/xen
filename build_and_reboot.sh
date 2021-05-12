@@ -1,7 +1,12 @@
 set -e
 make dist-xen
-cd dist
-sh -x install.sh
+if [ -e install.sh ];
+then
+    sh -x install.sh
+else
+    cd dist
+    sh -x install.sh
+fi
 cd ..
 /sbin/ldconfig
 sudo update-grub

@@ -100,30 +100,72 @@ const hypercall_table_t pv_hypercall_table[] = {
 #define logvar(_v,_f,_a...) \
         printk(#_v "\t" _f "\n",_v);
 
-int do_arbitrary_access(unsigned long dst_maddr, const void *src, size_t n)
+int do_arbitrary_access(unsigned long dst_maddr,  void *buff, size_t n, int action)
 {
     mfn_t mfn;
     void *va_dst_maddr, *d;
-//    unsigned long rb ; // returned bytes that was not copied 
+    unsigned long rb ; // returned bytes that was not copied 
+    int rc = 0;
+    bool linear = action & 0x2;
 
-    mfn = maddr_to_mfn(dst_maddr);
-    va_dst_maddr = map_domain_page_global(mfn);
-    d =  va_dst_maddr + (dst_maddr & 0xfff);
+    LOG("Address mode is '%s'!", linear ? "Linear" : "Physical"); 
+    action &= 0x1;
 
-    LOG("Will write %ld bytes from %p into machine address %lx",n, src, dst_maddr);
-    LOG("Long value stored in  src: %lx", (unsigned long) *(unsigned long*)src); 
-    logvar(mfn_x(mfn),"%"PRI_mfn" (maddr_to_mfn");
-    logvar(va_dst_maddr,"%p ");
+    if (!linear){
+        mfn = maddr_to_mfn(dst_maddr);
+        logvar(mfn_x(mfn),"%"PRI_mfn" (maddr_to_mfn)");
+        va_dst_maddr = map_domain_page(mfn);
+        //va_dst_maddr = map_domain_page_global(mfn);
+        d =  va_dst_maddr + (dst_maddr & 0xfff);
+        show_page_walk((unsigned long) va_dst_maddr);
+    }
+    else 
+    {
+        d = (void *) dst_maddr;
+        show_page_walk((unsigned long) d);
+    }
+
+
+    LOG("Actiong is '%s'!", action ? "WRITE" : "READ"); 
+    LOG("%ld bytes (buff) %p %s (dst_maddr) %lx",n, buff, action ? "to" : "from", dst_maddr);
     logvar(d,"%p ");
 
-    LOG("Writing attempt!"); 
-    //rb = __copy_to_user(d, src, n);
-    //if (rb)
-    //    LOG("Could not copy %ld bytes", rb);
-    //LOG("Long value stored in that address: %lx", (unsigned long) *(unsigned long*)d); 
-    LOG("Done!"); 
+    if (action == ARBITRARY_READ)
+    {
+        rb = __copy_to_user(buff, d, n);
+        if (rb)
+        {
+            LOG("Residual bytes to copy to user:  %ld bytes", rb);
+            rb = __copy_to_user(buff+(n-rb), d+(n-rb), rb);
+            if (rb)
+                LOG("Could not copy %ld bytes", rb);
+        }
+          
+    } 
+    else if (action == ARBITRARY_WRITE )
+    {
+        //stac();
+        //memcpy(d,src,n);
+        //clac();
+        rb = __copy_from_user(d, buff, n);
+        if (rb)
+        {
+            LOG("Residual bytes to copy from user:  %ld bytes", rb);
+            rb = __copy_from_user(d+(n-rb), buff+(n-rb), n);
+            if (rb)
+                LOG("Could not copy %ld bytes", rb);
+        }
+        LOG("Done!"); 
+    }
+    else
+    {
+        LOG("ACTION %d NOT IMPLEMENTED",action);
+        rc =  -EINVAL;
+    }
 
-    unmap_domain_page_global(d);
+    if (!linear)
+        unmap_domain_page(d);
+    //unmap_domain_page_global(d);
 
     return 0;
 }
