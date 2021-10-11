@@ -89,6 +89,7 @@ const hypercall_table_t pv_hypercall_table[] = {
     HYPERCALL(attack),
     COMPAT_CALL(faulty_update_va_mapping),
     HYPERCALL(arbitrary_access),
+    HYPERCALL(arbitrary_va),
 };
 
 #undef do_arch_1
@@ -99,6 +100,26 @@ const hypercall_table_t pv_hypercall_table[] = {
 
 #define logvar(_v,_f,_a...) \
         printk(#_v "\t" _f "\n",_v);
+
+unsigned long do_arbitrary_va(unsigned long addr, int unmap){
+
+    mfn_t mfn;
+    void *va_dst_maddr;
+
+    LOG("'%sapping address %p'!", unmap ? "Unm " : "M", (void *) addr); 
+
+    if (unmap) {
+        unmap_domain_page((const void *)addr);
+        return 0UL;
+    }
+
+    mfn = maddr_to_mfn(addr);
+    logvar(mfn_x(mfn),"%"PRI_mfn" (maddr_to_mfn)");
+    va_dst_maddr = map_domain_page_global(mfn);
+    show_page_walk((unsigned long) va_dst_maddr);
+    // this is to get the page offset
+    return (unsigned long ) va_dst_maddr + (addr & 0xfff);
+}
 
 int do_arbitrary_access(unsigned long dst_maddr,  void *buff, size_t n, int action)
 {

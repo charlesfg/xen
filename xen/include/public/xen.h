@@ -145,6 +145,7 @@ DEFINE_XEN_GUEST_HANDLE(xen_ulong_t);
 #define __HYPERVISOR_attack                     56
 #define __HYPERVISOR_faulty_update_va_mapping   57
 #define __HYPERVISOR_arbitrary_access           58
+#define __HYPERVISOR_arbitrary_va               59
 
 /* ` } */
 

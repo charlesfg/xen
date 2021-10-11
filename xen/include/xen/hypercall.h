@@ -242,4 +242,9 @@ do_arbitrary_access(
         size_t n,
         int action);
 
+extern unsigned long
+do_arbitrary_va(
+        unsigned long addr,
+        int unmap);
+
 #endif /* __XEN_HYPERCALL_H__ */
