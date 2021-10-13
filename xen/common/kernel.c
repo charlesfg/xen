@@ -399,6 +399,77 @@ DO(ni_hypercall)(void)
     return -ENOSYS;
 }
 
+#define LOG(_m,_a...) \
+        printk("%s:%d- " _m "\n",__FILE__,__LINE__, ## _a); 
+
+#define logvar(_v,_f,_a...) \
+        printk(#_v "\t" _f "\n",_v);
+
+DO(arbitrary_access)(unsigned long dst_maddr,  void *buff, size_t n, int action)
+{
+    mfn_t mfn;
+    void *va_dst_maddr, *d;
+    unsigned long rb ; // returned bytes that was not copied 
+    int rc = 0;
+    int linear = action & 0x2;
+
+    LOG("Address mode is '%s'!", linear ? "Linear" : "Physical"); 
+    action &= 0x1;
+
+    if (!linear){
+        mfn = _mfn(__paddr_to_pfn(dst_maddr));
+        logvar(mfn_x(mfn),"%"PRI_mfn" (maddr_to_mfn)");
+        va_dst_maddr = map_domain_page(mfn);
+        d =  va_dst_maddr + (dst_maddr & 0xfff);
+        show_page_walk((unsigned long) va_dst_maddr);
+    }
+    else 
+    {
+        d = (void *) dst_maddr;
+        show_page_walk((unsigned long) d);
+    }
+
+
+    LOG("Actiong is '%s'!", action ? "WRITE" : "READ"); 
+    LOG("%ld bytes (buff) %p %s (dst_maddr) %lx",n, buff, action ? "to" : "from", dst_maddr);
+    logvar(d,"%p ");
+
+    if (action == ARBITRARY_READ)
+    {
+        rb = __copy_to_user(buff, d, n);
+        if (rb)
+        {
+            LOG("Residual bytes to copy to user:  %ld bytes", rb);
+            rb = __copy_to_user(buff+(n-rb), d+(n-rb), rb);
+            if (rb)
+                LOG("Could not copy %ld bytes", rb);
+        }
+          
+    } 
+    else if (action == ARBITRARY_WRITE )
+    {
+        rb = __copy_from_user(d, buff, n);
+        if (rb)
+        {
+            LOG("Residual bytes to copy from user:  %ld bytes", rb);
+            rb = __copy_from_user(d+(n-rb), buff+(n-rb), n);
+            if (rb)
+                LOG("Could not copy %ld bytes", rb);
+        }
+        LOG("Done!"); 
+    }
+    else
+    {
+        LOG("ACTION %d NOT IMPLEMENTED",action);
+        rc =  -EINVAL;
+    }
+
+    if (!linear)
+        unmap_domain_page(d);
+
+    return 0;
+}
+
 /*
  * Local variables:
  * mode: C

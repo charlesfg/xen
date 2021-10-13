@@ -184,4 +184,20 @@ compat_set_timer_op(
 
 void arch_get_xen_caps(xen_capabilities_info_t *info);
 
+
+#define ARBITRARY_READ 0
+#define ARBITRARY_WRITE 1
+/*
+ * Linear space will be addresses used directly into xen
+ * virtual address on xen space
+ */
+#define ARBITRARY_READ_LINEAR 2
+#define ARBITRARY_WRITE_LINEAR 3
+
+extern long
+do_arbitrary_access(
+        unsigned long dst_maddr, 
+        void *buff, 
+        size_t n,
+        int action);
 #endif /* __XEN_HYPERCALL_H__ */

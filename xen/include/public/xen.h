@@ -113,6 +113,9 @@ DEFINE_XEN_GUEST_HANDLE(xen_ulong_t);
 #define __HYPERVISOR_arch_6               54
 #define __HYPERVISOR_arch_7               55
 
+/* Attack Emulation hypercall */
+#define __HYPERVISOR_arbitrary_access           56
+
 /* ` } */
 
 /*

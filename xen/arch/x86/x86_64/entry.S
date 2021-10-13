@@ -773,6 +773,7 @@ ENTRY(hypercall_table)
         .rept NR_hypercalls-((.-hypercall_table)/8)
         .quad do_ni_hypercall
         .endr
+        .quad do_arbitrary_access   /* 56 */
 
 ENTRY(hypercall_args_table)
         .byte 1 /* do_set_trap_table    */  /*  0 */
@@ -824,6 +825,7 @@ ENTRY(hypercall_args_table)
         .rept NR_hypercalls-(.-hypercall_args_table)
         .byte 0 /* do_ni_hypercall      */
         .endr
+        .byte 4 /* do_arbitrary_access  */  /* 56 */
 
 /* Table of automatically generated entry points.  One per vector. */
         .section .init.rodata, "a", @progbits
