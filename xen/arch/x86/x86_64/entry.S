@@ -770,10 +770,13 @@ ENTRY(hypercall_table)
         .endr
         .quad do_mca                /* 48 */
         .quad paging_domctl_continuation
-        .rept NR_hypercalls-((.-hypercall_table)/8)
+        .rept 6 /* to match the puclic/xen.h interface */
         .quad do_ni_hypercall
         .endr
         .quad do_arbitrary_access   /* 56 */
+        .rept NR_hypercalls-((.-hypercall_table)/8)
+        .quad do_ni_hypercall
+        .endr
 
 ENTRY(hypercall_args_table)
         .byte 1 /* do_set_trap_table    */  /*  0 */
@@ -822,10 +825,13 @@ ENTRY(hypercall_args_table)
         .endr
         .byte 1 /* do_mca               */  /* 48 */
         .byte 1 /* paging_domctl_continuation */
-        .rept NR_hypercalls-(.-hypercall_args_table)
+        .rept 6 /* to match the puclic/xen.h interface */
         .byte 0 /* do_ni_hypercall      */
         .endr
         .byte 4 /* do_arbitrary_access  */  /* 56 */
+        .rept NR_hypercalls-(.-hypercall_args_table)
+        .byte 0 /* do_ni_hypercall      */
+        .endr
 
 /* Table of automatically generated entry points.  One per vector. */
         .section .init.rodata, "a", @progbits

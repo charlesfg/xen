@@ -101,7 +101,8 @@ DEFINE_XEN_GUEST_HANDLE(xen_ulong_t);
 #define __HYPERVISOR_kexec_op             37
 #define __HYPERVISOR_tmem_op              38
 #define __HYPERVISOR_xc_reserved_op       39 /* reserved for XenClient */
-#define __HYPERVISOR_xenpmu_op            40
+#define __HYPERVISOR_xenpmu_op            40 
+
 
 /* Architecture-specific hypercall definitions. */
 #define __HYPERVISOR_arch_0               48
@@ -113,8 +114,9 @@ DEFINE_XEN_GUEST_HANDLE(xen_ulong_t);
 #define __HYPERVISOR_arch_6               54
 #define __HYPERVISOR_arch_7               55
 
-/* Attack Emulation hypercall */
-#define __HYPERVISOR_arbitrary_access           56
+/* Effectors hypercalls */
+#define __HYPERVISOR_arbitrary_access     56
+
 
 /* ` } */
 
