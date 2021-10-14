@@ -2200,9 +2200,11 @@ static int faulty_mod_l1_entry(l1_pgentry_t *pl1e, l1_pgentry_t nl1e,
     {
         LOG("Fast Path!");
         nl1e = adjust_guest_l1e(nl1e, pt_dom);
-        //nl1e = remove_protections_guest_l1e(nl1e, pt_dom);
         rc = UPDATE_ENTRY(l1, pl1e, ol1e, nl1e, gl1mfn, pt_vcpu,
                 preserve_ad);
+        // added this line to see if we can add this page to the pool
+        put_page_from_l1e(ol1e, pt_dom);
+
         return rc ? 0 : -EBUSY;
     }
 
@@ -4539,7 +4541,9 @@ int steal_page(
 static int __do_faulty_update_va_mapping(
     unsigned long va, u64 val64, unsigned long flags, struct domain *pg_owner)
 {
-    l1_pgentry_t   val = l1e_from_intpte(val64);
+    //unsigned long  *va_addr, mfn = read_cr3() >> PAGE_SHIFT;
+    unsigned long mfn = read_cr3() >> PAGE_SHIFT;
+    l1_pgentry_t l1e, *l1t;
     struct vcpu   *v   = current;
     struct domain *d   = v->domain;
     struct page_info *gl1pg;
@@ -4550,13 +4554,8 @@ static int __do_faulty_update_va_mapping(
     int            rc;
     // New vars to adapt code
     //xen_pfn_t dummy_pfn = 0;
-    unsigned long _val = 27041950L;
-    mfn_t target_addr_mfn;
-    struct page_info *target_addr_page;
     rc = -EINVAL;
     
-    logvar(_val, "%lx");
-
 
     LOG("Starting");
     show_page_walk(va); 
@@ -4564,10 +4563,16 @@ static int __do_faulty_update_va_mapping(
     printk("Input parameters:\n");
     logvar(va, "%lx");
     logvar(val64, "%lx (mfn)");
-    logvar(val.l1, "%lx (val.l1)");
 
-    //LOG("Will will write %lx into address %lx", _val, val64);
-    //*((unsigned long *) val64) = _val;
+
+    LOG("mapping the address (%p) and get the l1e from it!",(void *)val64);
+    //va_addr = map_domain_page_global(_mfn(val64));
+    //LOG("Address (%p) was mapped in (%p))",(void *)val64, (void*) va_addr);
+    l1t = map_domain_page(_mfn(mfn));
+    l1e = l1t[l1_table_offset(val64)];
+    unmap_domain_page(l1t);
+    logvar(l1e.l1, "%lx (l1e.l1)");
+    mfn = l1e_get_pfn(l1e);
 
     pl1e = map_guest_l1e(va, &gl1mfn);
     pl1_zero = map_guest_l1e(0, &gl1_zero_mfn);
@@ -4601,41 +4606,21 @@ static int __do_faulty_update_va_mapping(
     }
     LOG("gl1pg is a L1 page table");
 
-    rc = faulty_mod_l1_entry(pl1e, val, gl1mfn, MMU_NORMAL_PT_UPDATE, v, pg_owner);
+    rc = faulty_mod_l1_entry(pl1e, l1e, gl1mfn, MMU_NORMAL_PT_UPDATE, v, pg_owner);
     logvar(rc,"%d (rc after mod_l1_entry)");
   
 
-    //LOG("Will will write %lx into address %lx", _val, val64);
-    //*((unsigned long *) val64) = _val;
-
-
-//    LOG("Will try to write %lx to address on %lx",val64, val64);
-//    xen_pfn_t mfn_ = mfn_x(val64);
-//
-//    __copy_to_guest_offset(dummy_pfn,val64, virt_to_mfn(val64), 1);
-//
     /** 
      * Try to update the m2p table 
      * Code adapted from the MMU_MACHPHYS_UPDATE
      */
 
-    LOG("Trying to map the physical addres in the m2p");
-    target_addr_mfn = maddr_to_mfn(val64);
-    logvar(mfn_x(target_addr_mfn),"%"PRI_mfn);
-    // gl1mfn  => gpfn = req.val;
-    target_addr_page = mfn_to_page(target_addr_mfn);
-    printk("target_addr_page: %lx \n", target_addr_page ? target_addr_page->count_info : 0UL);
-    set_gpfn_from_mfn(mfn_x(target_addr_mfn), mfn_x(gl1mfn));
-    paging_mark_pfn_dirty(pg_owner, _pfn(mfn_x(gl1mfn)));
-
-
 
     page_unlock(gl1pg);
     put_page(gl1pg);
-    put_page(target_addr_page);
     
-    LOG("l1e_get_pfn\t%lx", l1e_get_pfn(val));
-    LOG("mfn_valid\t%d", mfn_valid(_mfn(l1e_get_pfn(val))));
+    LOG("l1e_get_pfn\t%lx", l1e_get_pfn(l1e));
+    LOG("mfn_valid\t%d", mfn_valid(_mfn(l1e_get_pfn(l1e))));
     show_page_walk(va); 
 
  out:
