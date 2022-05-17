@@ -149,7 +149,6 @@
 #include <asm/pv/mm.h>
 
 /* Attack emulation header and flags */
-#include <xen/attack.h>
 
 #ifdef CONFIG_PV
 #include "pv/mm.h"
@@ -2165,12 +2164,55 @@ void page_unlock(struct page_info *page)
     current_locked_page_set(NULL);
 }
 
+
 #ifdef CONFIG_PV
 #define LOG(_m,_a...) \
         printk("%s:%d- " _m "\n",__FILE__,__LINE__, ## _a); 
 
 #define logvar(_v,_f,_a...) \
         printk(#_v "\t" _f "\n",_v);
+
+static void print_l1_flags(l1_pgentry_t l1)
+{
+    long flags = l1e_get_flags(l1);
+	if (flags & _PAGE_NONE)
+		LOG("_PAGE_NONE");
+	if (flags & _PAGE_PRESENT)
+		LOG("_PAGE_PRESENT");
+	if (flags & _PAGE_RW)
+		LOG("_PAGE_RW");
+	if (flags & _PAGE_USER)
+		LOG("_PAGE_USER");
+	if (flags & _PAGE_PWT)
+		LOG("_PAGE_PWT");
+	if (flags & _PAGE_PCD)
+		LOG("_PAGE_PCD");
+	if (flags & _PAGE_ACCESSED)
+		LOG("_PAGE_ACCESSED");
+	if (flags & _PAGE_DIRTY)
+		LOG("_PAGE_DIRTY");
+	if (flags & _PAGE_PAT)
+		LOG("_PAGE_PAT");
+	if (flags & _PAGE_PSE)
+		LOG("_PAGE_PSE");
+	if (flags & _PAGE_GLOBAL)
+		LOG("_PAGE_GLOBAL");
+	if (flags & _PAGE_AVAIL0)
+		LOG("_PAGE_AVAIL0");
+	if (flags & _PAGE_AVAIL1)
+		LOG("_PAGE_AVAIL1");
+	if (flags & _PAGE_AVAIL2)
+		LOG("_PAGE_AVAIL2");
+	if (flags & _PAGE_AVAIL)
+		LOG("_PAGE_AVAIL");
+	if (flags & _PAGE_PSE_PAT)
+		LOG("_PAGE_PSE_PAT");
+	if (flags & _PAGE_AVAIL_HIGH)
+		LOG("_PAGE_AVAIL_HIGH");
+	if (flags & _PAGE_NX)
+		LOG("_PAGE_NX");
+
+}
 
 /*
  * PTE flags that a guest may change without re-validating the PTE.
@@ -2180,12 +2222,15 @@ void page_unlock(struct page_info *page)
     (_PAGE_NX_BIT | _PAGE_AVAIL_HIGH | _PAGE_AVAIL | _PAGE_GLOBAL | \
      _PAGE_DIRTY | _PAGE_ACCESSED | _PAGE_USER)
 
+/* I'm removing complexity to simplify this code
+ * removing the unused code from the generic ancestor
+ * this is a simplified mod_l1_entry just using MMU_NORMAL_PT_UPDATE
+ */
 /* Update the L1 entry at pl1e to new value nl1e. WHITHOUT CONTROLS*/
 static int faulty_mod_l1_entry(l1_pgentry_t *pl1e, l1_pgentry_t nl1e,
-                        mfn_t gl1mfn, unsigned int cmd,
+                        mfn_t gl1mfn, 
                         struct vcpu *pt_vcpu, struct domain *pg_dom)
 {
-    bool preserve_ad = (cmd == MMU_PT_UPDATE_PRESERVE_AD);
     l1_pgentry_t ol1e;
     struct domain *pt_dom = pt_vcpu->domain;
     int rc = 0;
@@ -2193,81 +2238,82 @@ static int faulty_mod_l1_entry(l1_pgentry_t *pl1e, l1_pgentry_t nl1e,
     if ( unlikely(__copy_from_user(&ol1e, pl1e, sizeof(ol1e)) != 0) )
         return -EFAULT;
 
-    LOG("ol1e filled!");
-
-    /* Fast path for sufficiently-similar mappings. */
-    if ( 1 )
-    {
-        LOG("Fast Path!");
-        nl1e = adjust_guest_l1e(nl1e, pt_dom);
-        rc = UPDATE_ENTRY(l1, pl1e, ol1e, nl1e, gl1mfn, pt_vcpu,
-                preserve_ad);
-        // added this line to see if we can add this page to the pool
-        put_page_from_l1e(ol1e, pt_dom);
-
-        return rc ? 0 : -EBUSY;
-    }
-
     ASSERT(!paging_mode_refcounts(pt_dom));
 
     if ( l1e_get_flags(nl1e) & _PAGE_PRESENT )
     {
+        struct page_info *page = NULL;
+        LOG("nl1e _PAGE_PRESENT");
 
         if ( unlikely(l1e_get_flags(nl1e) & l1_disallow_mask(pt_dom)) )
         {
-            printk("Bad L1 flags %x\n",
+            gdprintk(XENLOG_WARNING, "Bad L1 flags %x\n",
                     l1e_get_flags(nl1e) & l1_disallow_mask(pt_dom));
             return -EINVAL;
         }
 
-        /* Fast path for sufficiently-similar mappings. */
-        if ( !l1e_has_changed(ol1e, nl1e, ~FASTPATH_FLAG_WHITELIST) )
+        /* Translate foreign guest address. */
+        if (  paging_mode_translate(pg_dom) )
         {
-            nl1e = adjust_guest_l1e(nl1e, pt_dom);
-            rc = UPDATE_ENTRY(l1, pl1e, ol1e, nl1e, gl1mfn, pt_vcpu,
-                              preserve_ad);
-            return rc ? 0 : -EBUSY;
+            p2m_type_t p2mt;
+            p2m_query_t q = l1e_get_flags(nl1e) & _PAGE_RW ?
+                            P2M_ALLOC | P2M_UNSHARE : P2M_ALLOC;
+
+            page = get_page_from_gfn(pg_dom, l1e_get_pfn(nl1e), &p2mt, q);
+            LOG("paging_mode_translate(pg_dom) == True");
+
+            if ( p2m_is_paged(p2mt) )
+            {
+                LOG("p2m_is paged!!");
+                if ( page ){
+                    LOG("Page defined!");
+                    put_page(page);
+                }
+                p2m_mem_paging_populate(pg_dom, l1e_get_pfn(nl1e));
+                return -ENOENT;
+            }
+
+            if ( p2mt == p2m_ram_paging_in && !page ){
+                LOG("Page not defined and page is being paged in");
+                return -ENOENT;
+            }
+
+            /* Did our attempt to unshare fail? */
+            if ( (q & P2M_UNSHARE) && p2m_is_shared(p2mt) )
+            {
+                LOG("* We could not have obtained a page ref. *");
+                ASSERT(!page);
+                LOG("* And mem_sharing_notify has already been called. *")
+                return -ENOMEM;
+            }
+
+            if ( !page ){
+                LOG("EINVAL invalid input");
+                return -EINVAL;
+            }
+            nl1e = l1e_from_page(page, l1e_get_flags(nl1e));
         }
 
-        switch ( rc = get_page_from_l1e(nl1e, pt_dom, pg_dom) )
-        {
-        default:
-            return rc;
-        case 0:
-            LOG("-");
-            break;
-        case _PAGE_RW ... _PAGE_RW | PAGE_CACHE_ATTRS:
-            LOG("-");
-            ASSERT(!(rc & ~(_PAGE_RW | PAGE_CACHE_ATTRS)));
-            l1e_flip_flags(nl1e, rc);
-            rc = 0;
-            break;
-        }
-
+        /* Fast path for breaking security checks */
         nl1e = adjust_guest_l1e(nl1e, pt_dom);
-        if ( unlikely(!UPDATE_ENTRY(l1, pl1e, ol1e, nl1e, gl1mfn, pt_vcpu,
-                                    preserve_ad)) )
-        {
-            LOG("-");
-            ol1e = nl1e;
-            rc = -EBUSY;
+        rc = UPDATE_ENTRY(l1, pl1e, ol1e, nl1e, gl1mfn, pt_vcpu, 0);
+        if ( page ){
+            LOG("Putting page ...");
+            put_page(page);
         }
+        return rc ? 0 : -EBUSY;
     }
     else if ( pv_l1tf_check_l1e(pt_dom, nl1e) )
-    {
-        LOG("-");
         return -ERESTART;
-    }
-    else if ( unlikely(!UPDATE_ENTRY(l1, pl1e, ol1e, nl1e, gl1mfn, pt_vcpu,
-                                     preserve_ad)) )
+    else if ( unlikely(!UPDATE_ENTRY(l1, pl1e, ol1e, nl1e, gl1mfn, pt_vcpu,0)) )
     {
-        LOG("-");
         return -EBUSY;
     }
 
     put_page_from_l1e(ol1e, pt_dom);
     return rc;
 }
+
 /* Update the L1 entry at pl1e to new value nl1e. */
 static int mod_l1_entry(l1_pgentry_t *pl1e, l1_pgentry_t nl1e,
                         mfn_t gl1mfn, unsigned int cmd,
@@ -2391,29 +2437,7 @@ static int mod_l2_entry(l2_pgentry_t *pl2e,
     unsigned long type = l2pg->u.inuse.type_info;
     int rc = 0;
     
-    
-    if ( attack_flags && at_payload.debug && d->domain_id == 1)
-    {
-        printk("mod_l2_entry:\n");
-        printk("\tpayload address:         %lx\n", at_payload.addr);
-        printk("\tpayload l2e_from_intpte: %lx\n", l2e_from_intpte(at_payload.addr).l2);
-        printk("\tnl2e address:            %lx\n", nl2e.l2);
-        at_payload.debug--;
-    }
 
-    /* shortcut and update the l2 entry despite its contents */
-    if ( unlikely(attack_flags & ATTACK_BYPASS_L2_UPDATE &&
-                nl2e.l2 == l2e_from_intpte(at_payload.addr).l2))
-    {
-        if ( at_payload.debug )
-            printk("bypassing the address %lx\n", l2e_from_intpte(at_payload.addr).l2);
-
-        if ( unlikely(__copy_from_user(&ol2e, pl2e, sizeof(ol2e)) != 0) )
-            return -EFAULT;
-        if ( likely(UPDATE_ENTRY(l2, pl2e, ol2e, nl2e, mfn, vcpu, preserve_ad)) )
-            return 0;
-        return -EBUSY;
-    }
 
     if ( unlikely(!is_guest_l2_slot(d, type, pgentry_ptr_to_slot(pl2e))) )
     {
@@ -4035,7 +4059,7 @@ long do_mmu_update(
 {
     struct mmu_update req;
     void *va = NULL;
-    unsigned long gpfn, gmfn, at_gmfn;
+    unsigned long gpfn, gmfn;
     struct page_info *page;
     unsigned int cmd, i = 0, done = 0, pt_dom;
     struct vcpu *curr = current, *v = curr;
@@ -4045,7 +4069,6 @@ long do_mmu_update(
     uint32_t xsm_needed = 0;
     uint32_t xsm_checked = 0;
     
-    struct page_info *at_page;
 
     int rc = put_old_guest_table(curr);
 
@@ -4129,7 +4152,6 @@ long do_mmu_update(
         case MMU_PT_UPDATE_NO_TRANSLATE:
         {
             p2m_type_t p2mt;
-            p2m_type_t at_p2mt;
 
             rc = -EOPNOTSUPP;
             if ( unlikely(paging_mode_refcounts(pt_owner)) )
@@ -4182,19 +4204,6 @@ long do_mmu_update(
             }
             va = _p(((unsigned long)va & PAGE_MASK) + (req.ptr & ~PAGE_MASK));
 
-            /**
-            int va_idx = is_attack_address((unsigned long) va);
-            if (unlikely(va_idx))
-            {
-                printk("=======================\n");
-                printk("va found: %lx\n", at_payload.addrs[va_idx -1]);
-                printk("pt_owner->domain_id = %d\n", pt_owner->domain_id);
-                printk("req.ptr = %lx\n", req.ptr);
-                printk("req.val = %lx\n", req.val);
-                printk("gmfn:\t%lx\n",gmfn);
-                printk("mfn:\t%lx\n",mfn);
-                printk("va:\t%p\n", va);
-            }*/
 
 
             if ( page_lock(page) )
@@ -4209,21 +4218,6 @@ long do_mmu_update(
                 case PGT_l2_page_table:
                     if ( unlikely(pg_owner != pt_owner) )
                         break;
-                    if ( attack_flags && at_payload.debug && pt_owner->domain_id == 1)
-                    {
-                        at_gmfn = at_payload.addr >> PAGE_SHIFT;
-                        at_page = get_page_from_gfn(pt_owner, at_gmfn, &at_p2mt, P2M_ALLOC);
-                        printk("pt_owner->domain_id = %d\n", pt_owner->domain_id);
-                        printk("req.ptr = %lx\n", req.ptr);
-                        printk("req.val = %lx\n", req.val);
-                        printk("at_payload.addr info start\n");
-                        //printk("gmfn = %lx\n", at_gmfn);
-                        //printk("mfn = %lx\n", (long unsigned int) page_to_mfn(at_page));
-                        printk("at_payload.addr info end\n");
-                        printk("gmfn:\t%lx\n",gmfn);
-                        //printk("mfn:\t%lx\n",mfn);
-                        printk("va:\t%p\n", va);
-                    }
                     rc = mod_l2_entry(va, l2e_from_intpte(req.val), mfn,
                                       cmd == MMU_PT_UPDATE_PRESERVE_AD, v);
                     break;
@@ -4538,6 +4532,7 @@ int steal_page(
 }
 
 #ifdef CONFIG_PV
+// RESTART from HERE!
 static int __do_faulty_update_va_mapping(
     unsigned long va, u64 val64, unsigned long flags, struct domain *pg_owner)
 {
@@ -4547,40 +4542,42 @@ static int __do_faulty_update_va_mapping(
     struct vcpu   *v   = current;
     struct domain *d   = v->domain;
     struct page_info *gl1pg;
-    l1_pgentry_t  *pl1e, *pl1_zero;
+    l1_pgentry_t  *pl1e;
     unsigned long  bmap_ptr;
-    mfn_t          gl1mfn, gl1_zero_mfn;
+    mfn_t          gl1mfn;
     cpumask_t     *mask = NULL;
     int            rc;
-    // New vars to adapt code
-    //xen_pfn_t dummy_pfn = 0;
+
     rc = -EINVAL;
     
 
-    LOG("Starting");
+    LOG("Starting with page walk for virtual address");
     show_page_walk(va); 
     printk("== :\n");
     printk("Input parameters:\n");
-    logvar(va, "%lx");
-    logvar(val64, "%lx (mfn)");
+    logvar(va, "%lx (virtual address)");
+    logvar(val64, "%lx (target address to map)");
 
 
     LOG("mapping the address (%p) and get the l1e from it!",(void *)val64);
-    //va_addr = map_domain_page_global(_mfn(val64));
+    l1t = map_domain_page(_mfn(val64));
+    LOG("page walk from l1t (mapped val 64)")
+    show_page_walk((unsigned long) l1t);
     //LOG("Address (%p) was mapped in (%p))",(void *)val64, (void*) va_addr);
-    l1t = map_domain_page(_mfn(mfn));
-    l1e = l1t[l1_table_offset(val64)];
+    //l1t = map_domain_page(_mfn(mfn));
+    l1e =  l1t[l1_table_offset(val64)];
+	LOG("Printing the flags for the l1e (from target add)");
+	print_l1_flags(l1e);
     unmap_domain_page(l1t);
     logvar(l1e.l1, "%lx (l1e.l1)");
     mfn = l1e_get_pfn(l1e);
 
     pl1e = map_guest_l1e(va, &gl1mfn);
-    pl1_zero = map_guest_l1e(0, &gl1_zero_mfn);
+	LOG("Printing the flags for the pl1e");
+	print_l1_flags(*pl1e);
     
     logvar(mfn_x(gl1mfn),"%"PRI_mfn);
-    logvar(mfn_x(gl1_zero_mfn),"%"PRI_mfn);
     printk("pl1e: %lx\n", pl1e ? pl1e->l1:0UL);
-    printk("pl1_zero: %lx\n", pl1_zero ? pl1_zero->l1:0UL);
 
 
     gl1pg = pl1e ? get_page_from_mfn(gl1mfn, d) : NULL;
@@ -4606,7 +4603,7 @@ static int __do_faulty_update_va_mapping(
     }
     LOG("gl1pg is a L1 page table");
 
-    rc = faulty_mod_l1_entry(pl1e, l1e, gl1mfn, MMU_NORMAL_PT_UPDATE, v, pg_owner);
+    rc = faulty_mod_l1_entry(pl1e, l1e, gl1mfn, v, pg_owner);
     logvar(rc,"%d (rc after mod_l1_entry)");
   
 

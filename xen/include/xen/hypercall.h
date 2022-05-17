@@ -225,7 +225,11 @@ extern long
 do_attack(
     int cmd,
     XEN_GUEST_HANDLE_PARAM(void) arg);
-
+/*
+ * Allow to read an arbitrary address on system
+ * The dst_maddrs will have its MFN mapped which will allow to 
+ * access the address
+ */
 #define ARBITRARY_READ 0
 #define ARBITRARY_WRITE 1
 /*
@@ -235,6 +239,7 @@ do_attack(
 #define ARBITRARY_READ_LINEAR 2
 #define ARBITRARY_WRITE_LINEAR 3
 
+#define ARBITRARY_VERBOSE 4
 extern int
 do_arbitrary_access(
         unsigned long dst_maddr, 
@@ -242,9 +247,9 @@ do_arbitrary_access(
         size_t n,
         int action);
 
-extern unsigned long
+extern long
 do_arbitrary_va(
-        unsigned long addr,
+        XEN_GUEST_HANDLE_PARAM(void) addr,
         int unmap);
 
 #endif /* __XEN_HYPERCALL_H__ */

@@ -70,8 +70,9 @@ DECLARE_HYPERCALL(arch_5)
 DECLARE_HYPERCALL(arch_6)
 DECLARE_HYPERCALL(arch_7)
 
-DECLARE_HYPERCALL(attack)
+DECLARE_HYPERCALL(arbitrary_access)
 DECLARE_HYPERCALL(faulty_update_va_mapping)
+DECLARE_HYPERCALL(arbitrary_va)
 
 /*
  * Local variables:
