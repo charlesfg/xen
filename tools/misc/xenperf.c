@@ -34,6 +34,7 @@ const char *hypercall_name_table[64] =
     X(memory_op),
     X(multicall),
     X(update_va_mapping),
+    X(faulty_update_va_mapping),
     X(set_timer_op),
     X(event_channel_op_compat),
     X(xen_version),

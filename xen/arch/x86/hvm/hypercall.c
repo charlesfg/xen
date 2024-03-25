@@ -144,7 +144,8 @@ static const hypercall_table_t hvm_hypercall_table[] = {
 #endif
     HYPERCALL(xenpmu_op),
     COMPAT_CALL(dm_op),
-    HYPERCALL(arch_1)
+    HYPERCALL(arch_1),
+    HYPERCALL(attack)
 };
 
 #undef do_arch_1

@@ -4,6 +4,7 @@
  * Copyright (c) 2002-2005 K A Fraser
  */
 
+#include <xen/attack.h>
 #include <xen/init.h>
 #include <xen/lib.h>
 #include <xen/errno.h>
@@ -15,6 +16,8 @@
 #include <xsm/xsm.h>
 #include <asm/current.h>
 #include <public/version.h>
+#include <public/attack.h>
+
 
 #ifndef COMPAT
 
@@ -571,6 +574,69 @@ DO(vm_assist)(unsigned int cmd, unsigned int type)
     return vm_assist(current->domain, cmd, type, VM_ASSIST_VALID);
 }
 #endif
+/*
+ * A void guest handle can receive any struct value 
+ * check the examples in the xtf (xen test framework)
+ */
+DO(attack)(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
+{
+
+ 
+    attack_t attack_arg; 
+    int i;
+
+    if ( !guest_handle_is_null(arg) ) 
+    {
+        if ( copy_from_guest(&attack_arg, arg, 1) )
+        {
+            printk("Bad Address on arg on attack hypercall\n");
+            return -EFAULT;
+        }
+    }
+
+    if (attack_arg.debug) 
+    {
+        printk("Entering Attack Hypercall:\t%d\n", cmd);
+        printk("\tattack_arg.debug:\t%d\n", attack_arg.debug);
+        printk("\tattack_arg.addr\t\t%lx\n", attack_arg.addr);
+        for (i=0; i<10; i++)
+            printk("\tattack_arg.addrs[%d]\t%lx\n", i, attack_arg.addrs[i]);
+        print_attack_flags();
+        at_payload.debug = attack_arg.debug;
+    }
+    else
+    {
+        at_payload.debug = 0;
+    }
+
+	switch ( cmd )
+	{
+		case  ATTACK_SET_BYPASS_L2_UPDATE:
+        {
+            attack_flags |= ATTACK_BYPASS_L2_UPDATE;
+            at_payload.addr = attack_arg.addr;
+            break;
+        }
+		case  ATTACK_UNSET_BYPASS_L2_UPDATE:
+        {
+            attack_flags &= ~ATTACK_BYPASS_L2_UPDATE;
+            at_payload.addr = attack_arg.addr;
+            break;
+        }
+        default:
+        {
+            printk("HC-Attack: Operation not implemented: %d\n", cmd);
+            return -ENOSYS;
+        }
+
+	}
+    if (attack_arg.debug) 
+    {
+        print_attack_flags();
+        printk("Exiting Attack Hypercall!\n");
+    }
+    return 0;
+}
 
 /*
  * Local variables:

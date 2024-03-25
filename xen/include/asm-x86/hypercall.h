@@ -100,6 +100,12 @@ do_update_va_mapping(
     unsigned long flags);
 
 extern long
+do_faulty_update_va_mapping(
+    unsigned long va,
+    u64 val64,
+    unsigned long flags);
+
+extern long
 do_physdev_op(
     int cmd, XEN_GUEST_HANDLE_PARAM(void) arg);
 
@@ -160,6 +166,9 @@ extern int compat_platform_op(
 
 extern long compat_callback_op(
     int cmd, XEN_GUEST_HANDLE(void) arg);
+
+extern int compat_faulty_update_va_mapping(
+    unsigned int va, u32 lo, u32 hi, unsigned int flags);
 
 extern int compat_update_va_mapping(
     unsigned int va, u32 lo, u32 hi, unsigned int flags);
